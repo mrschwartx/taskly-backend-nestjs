@@ -1,0 +1,17 @@
+{
+    "folders": [
+        {
+            "name": "taskly-backend",
+            "path": "taskly-backend"
+        },
+        {
+            "name": "taskly-docker",
+            "path": "taskly-docker"
+        },
+        {
+            "name": ".",
+            "path": "."
+        }
+    ],
+    "settings": {}
+}
