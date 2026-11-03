@@ -1,10 +1,10 @@
-# Taskly Backend (Express)
+# Taskly Backend (NestJS)
 
-A task manager backend: sign up and sign in, manage your profile and avatar, and create, filter, sort and paginate to-do tasks. It is a REST API built with Express 5 and PostgreSQL, organised as a modular monolith with Domain-Driven Design and Clean Architecture.
+A task manager backend: sign up and sign in, manage your profile and avatar, and create, filter, sort and paginate to-do tasks. It is a REST API built with NestJS 12, TypeScript and PostgreSQL, organised as a modular monolith with Domain-Driven Design and Clean Architecture.
 
-The browser client is a separate Taskly frontend that talks to this API.
+The browser client is a separate Taskly frontend that talks to this API. The HTTP contract is identical to the former Express version, so the client needs no changes.
 
-**Stack:** Node.js 22 · Express 5 · PostgreSQL 18 · node-postgres · JWT · bcrypt · Multer · Winston · node:test · ESLint · Prettier · Docker · GitHub Actions
+**Stack:** Node.js 22 · NestJS 12 · TypeScript 6 · PostgreSQL 18 · node-postgres · JWT · bcrypt · Multer · Winston · Vitest · oxlint · Prettier · Docker · GitHub Actions
 
 ## Contents
 
@@ -16,6 +16,7 @@ The browser client is a separate Taskly frontend that talks to this API.
 - [API](#api)
 - [Testing](#testing)
 - [CI](#ci)
+- [Migrating from Express](#migrating-from-express)
 - [Limits](#limits)
 - [References](#references)
 
@@ -30,15 +31,16 @@ cd ../taskly-backend
 cp .env.example .env
 npm ci
 npm run secret-key
-npm run dev
+npm run start:dev
 ```
 
 Paste the generated value into `AUTH_SECRET` in `.env`. The API runs at http://localhost:8080 and pgAdmin at http://localhost:8081 (login `admin@taskly.dev` / `admin`, server host `taskly-postgres`, user `dev_user`, password `dev_pass`). Migrations run automatically on startup.
 
 | Goal               | Command                                   |
 | ------------------ | ----------------------------------------- |
-| Run in development | `npm run dev`                             |
-| Run in production  | `npm start`                               |
+| Run in development | `npm run start:dev`                       |
+| Build              | `npm run build`                           |
+| Run in production  | `npm run build && npm run start:prod`     |
 | Apply migrations   | `npm run migrate`                         |
 | Seed demo data     | `npm run seed`                            |
 | Run with Docker    | `make docker/up` (from `taskly-docker`)   |
@@ -91,12 +93,14 @@ The frontend must set `VITE_API_BASE_URL=http://localhost:8080/api/v1` and `VITE
 ```
 taskly-backend/
   src/
-    bootstrap/   composition root, app and server factories
-    config/      environment parsing and validation
-    shared/      errors, event bus, logging, HTTP and PostgreSQL helpers
-    modules/     users, tasks
-    scripts/     migrate, seed
-  test/          unit, integration and e2e suites
+    main.ts          process entry point and graceful shutdown
+    app.module.ts    root module
+    bootstrap/       application factory and HTTP configuration
+    config/          environment parsing and validation, config module
+    shared/          errors, event bus, logging, HTTP and PostgreSQL helpers
+    modules/         users, tasks
+    scripts/         migrate, seed
+  test/              unit, integration and e2e suites
 taskly-docker/
   taskly-backend/Dockerfile
   docker-compose.local.yml
@@ -112,25 +116,32 @@ modules/<name>/
   domain/          entities, value objects, repository contracts
   application/     use cases
   infrastructure/  PostgreSQL and other adapters
-  presentation/    Express routers and controllers
-  index.js         public API
+  presentation/    controllers, guards, interceptors, event subscribers
+  <name>.module.ts NestJS module wiring contracts to adapters
 ```
 
 ### Dependency rules
 
 - Dependencies point inward: presentation and infrastructure depend on application, application depends on domain.
-- Modules never import each other. They communicate through the in-process event bus, so deleting a user removes that user's tasks.
+- Domain and application code is plain TypeScript. Only use cases carry `@Injectable()`.
+- Contracts are abstract classes (`TaskRepository`, `UserRepository`, `PasswordHasher`, `TokenService`, `AvatarStorage`, `EventBus`) used as injection tokens and bound to adapters in each module.
+- Modules communicate through the in-process event bus, so deleting a user removes that user's tasks. The tasks module imports the users module only to reuse its `AuthGuard`.
+- Input is validated inside value objects, not with DTO decorators, so error messages and status codes stay identical to the Express version.
+
+### Request pipeline
+
+Body parsing, cookies, request logging and static files are configured in `bootstrap/configure-app.ts`, shared by the server and the tests. Authentication is `AuthGuard`, ownership of an account is `OwnAccountGuard`, avatar upload is `AvatarUploadInterceptor` and every error goes through `AllExceptionsFilter`. The ownership guard runs before the upload interceptor, so a rejected request never writes a file.
 
 ## Database
 
-Schema changes live in `src/shared/infrastructure/postgres/migrations` as numbered `.sql` files. The migrator applies pending files in order, each inside a transaction, records them in `schema_migrations` and holds an advisory lock so concurrent starts do not race. It runs on every startup and through `npm run migrate`.
+Schema changes live in `src/shared/infrastructure/postgres/migrations` as numbered `.sql` files, copied to `dist` by the Nest build. The migrator applies pending files in order, each inside a transaction, records them in `schema_migrations` and holds an advisory lock so concurrent starts do not race. It runs on every startup and through `npm run migrate`.
 
 | Table   | Notes                                                                                   |
 | ------- | --------------------------------------------------------------------------------------- |
 | `users` | `id` UUID, case-insensitive unique `email` and `username`, `password_hash`, `avatar_file`, timestamps |
 | `tasks` | `id` UUID, `owner_id` UUID (foreign key to `users`), `due` timestamptz, `status` and `priority` limited by `CHECK`, indexed on `(owner_id, status)` |
 
-- Identifiers are UUIDs. API responses still expose them as `_id` and `owner`, so existing clients keep working.
+- Identifiers are UUIDs. API responses expose them as `_id` and `owner`, so existing clients keep working.
 - Listings are ordered by `created_at` and `id`, so ties on the creation time still give a stable order.
 - `tasks.owner_id` references `users(id)` with `ON DELETE CASCADE`. The `user.deleted` event still removes a user's tasks.
 - `status` accepts `todo`, `in_progress` and `done` (default `todo`). `priority` accepts `low`, `medium` and `high`.
@@ -163,10 +174,10 @@ All routes are under `/api/v1`. Routes other than sign up and sign in require th
 | ----------- | -------------------------- | ----------------------------------------------------- |
 | Unit        | `npm run test:unit`        | Domain and use cases, no I/O                          |
 | Integration | `npm run test:integration` | Repositories and HTTP modules on a real PostgreSQL    |
-| E2E         | `npm run test:e2e`         | Full flows against the real server process            |
-| Coverage    | `npm run test:coverage`    | All tests with coverage                               |
+| E2E         | `npm run test:e2e`         | Full flows against the compiled server process        |
+| Coverage    | `npm run test:cov`         | Unit tests with coverage                              |
 
-Integration and e2e tests need a PostgreSQL server where the user can create databases. They read `TEST_DATABASE_URL` and default to the development database from `make docker/dev-up`. Every suite creates its own temporary database, runs the migrations and drops it afterwards. Other checks: `npm run lint`, `npm run format:check`.
+Integration and e2e tests need a PostgreSQL server where the user can create databases. They read `TEST_DATABASE_URL` and default to the development database from `make docker/dev-up`. Every suite creates its own temporary database, runs the migrations and drops it afterwards. `npm run test:e2e` builds the project first. Other checks: `npm run lint`, `npm run format:check`.
 
 ```sh
 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres npm test
@@ -177,9 +188,17 @@ TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres npm test
 `.github/workflows/ci.yml` runs these jobs:
 
 1. **Commitlint**: commit message linting on pull requests, configured in `.commitlintrc.json`.
-2. **Quality**: lint and format check.
+2. **Quality**: lint, format check and build.
 3. **Tests**: unit, integration and end-to-end suites against a PostgreSQL 18 service.
 4. **Docker**: builds the image, starts the Compose stack, then checks `/`, signs up a user and runs the seed.
+
+## Migrating from Express
+
+The routes, payloads, status codes, error messages, cookie, CORS, avatar handling and database schema are unchanged. Differences:
+
+- Seed and migrate scripts run from the compiled output: `dist/scripts/seed.js` and `dist/scripts/migrate.js`.
+- Authentication is a guard on matched routes. An unknown path under `/api/v1/users` or `/api/v1/tasks` now answers 404 without a cookie, where Express answered 401.
+- Client errors raised by the framework itself, such as an undecodable URL parameter, answer with their own 4xx status instead of 500.
 
 ## Limits
 
@@ -190,10 +209,10 @@ TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres npm test
 
 ## References
 
-- [Express](https://expressjs.com)
+- [NestJS](https://nestjs.com)
 - [PostgreSQL](https://www.postgresql.org/docs/18/)
 - [node-postgres](https://node-postgres.com)
 - [JSON Web Tokens](https://jwt.io)
-- [Node.js test runner](https://nodejs.org/api/test.html)
-- [ESLint](https://eslint.org) · [Prettier](https://prettier.io)
+- [Vitest](https://vitest.dev)
+- [oxlint](https://oxc.rs/docs/guide/usage/linter) · [Prettier](https://prettier.io)
 - [Docker multi-stage builds](https://docs.docker.com/build/building/multi-stage/)

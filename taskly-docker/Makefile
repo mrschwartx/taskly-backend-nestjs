@@ -23,7 +23,7 @@ docker/ps:
 	$(COMPOSE) ps
 
 docker/seed:
-	$(COMPOSE) exec taskly-backend node src/scripts/seed.js
+	$(COMPOSE) exec taskly-backend node dist/scripts/seed.js
 
 docker/clean:
 	$(COMPOSE) down -v --rmi local

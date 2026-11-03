@@ -30,6 +30,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run format:check
+      - run: npm run build
 
   taskly-test:
     name: taskly code tests
@@ -66,7 +67,7 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:integration
       - run: npm run test:e2e
-      - run: npm run test:coverage
+      - run: npm run test:cov
 
   taskly-docker:
     name: taskly docker container
