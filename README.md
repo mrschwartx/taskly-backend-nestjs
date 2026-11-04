@@ -1,10 +1,10 @@
-# Taskly Backend (NestJS)
+# Taskly Frontend (Next.js)
 
-A task manager backend: sign up and sign in, manage your profile and avatar, and create, filter, sort and paginate to-do tasks. It is a REST API built with NestJS 12, TypeScript and PostgreSQL, organised as a modular monolith with Domain-Driven Design and Clean Architecture.
+A task manager frontend: sign up, manage your profile and avatar, and create, filter, sort and paginate to-do tasks. It is a Next.js App Router application organised by feature. Pages are rendered on the server for the initial HTML and then hydrate in the browser, where all session handling and data fetching run.
 
-The browser client is a separate Taskly frontend that talks to this API. The HTTP contract is identical to the former Express version, so the client needs no changes.
+The browser talks to a separate Taskly REST API configured through environment variables.
 
-**Stack:** Node.js 22 · NestJS 12 · TypeScript 6 · PostgreSQL 18 · node-postgres · JWT · bcrypt · Multer · Winston · Vitest · oxlint · Prettier · Docker · GitHub Actions
+**Stack:** Next.js 16 (App Router) · React 19 · TypeScript · Chakra UI v3 · TanStack Query · React Hook Form · Vitest + Testing Library + MSW · Playwright · Docker · GitHub Actions
 
 ## Contents
 
@@ -12,207 +12,146 @@ The browser client is a separate Taskly frontend that talks to this API. The HTT
 - [Features](#features)
 - [Configuration](#configuration)
 - [Architecture](#architecture)
-- [Database](#database)
-- [API](#api)
+- [Routes](#routes)
 - [Testing](#testing)
 - [CI](#ci)
-- [Migrating from Express](#migrating-from-express)
 - [Limits](#limits)
 - [References](#references)
 
 ## Quick start
 
-Requires Node.js 22+ and Docker.
+Requires Node.js 22.22+ and a running Taskly API.
 
 ```sh
-cd taskly-docker
-make docker/dev-up
-cd ../taskly-backend
-cp .env.example .env
+cd taskly-frontend
+cp .env.example .env.local
 npm ci
-npm run secret-key
-npm run start:dev
+npm run dev
 ```
 
-Paste the generated value into `AUTH_SECRET` in `.env`. The API runs at http://localhost:8080 and pgAdmin at http://localhost:8081 (login `admin@taskly.dev` / `admin`, server host `taskly-postgres`, user `dev_user`, password `dev_pass`). Migrations run automatically on startup.
+The app runs at http://localhost:3000.
 
-| Goal               | Command                                   |
-| ------------------ | ----------------------------------------- |
-| Run in development | `npm run start:dev`                       |
-| Build              | `npm run build`                           |
-| Run in production  | `npm run build && npm run start:prod`     |
-| Apply migrations   | `npm run migrate`                         |
-| Seed demo data     | `npm run seed`                            |
-| Run with Docker    | `make docker/up` (from `taskly-docker`)   |
-| Seed in Docker     | `make docker/seed` (from `taskly-docker`) |
-| Stop Docker        | `make docker/down` (from `taskly-docker`) |
+| Goal                     | Command                                   |
+| ------------------------ | ----------------------------------------- |
+| Run in development       | `npm run dev`                             |
+| Run the production build | `npm run build && npm run start`          |
+| Run with Docker          | `make docker/up` (from `taskly-docker`)   |
+| Stop Docker              | `make docker/down` (from `taskly-docker`) |
 
-`make docker/up` creates `taskly-docker/.env` with a random database password and `AUTH_SECRET` on the first run, then starts PostgreSQL and the API and waits until both are healthy. `PORT` overrides the host port in the Docker setup. The container always listens on port 8080. Demo login after seeding: `johndoe123@mail.com` / `password123`.
+`PORT` overrides the host port in the Docker setup. The container always listens on port 3000. `NEXT_PUBLIC_*` values are inlined into the browser bundle at build time, so changing them requires `make docker/up` again.
 
 ## Features
 
-- **Authentication**: sign up, sign in and sign out with a JWT stored in an HTTP-only cookie.
-- **Users**: list users, update the profile, upload an avatar and delete the account.
-- **Tasks**: create, view, update and delete tasks.
-- **Listing**: filter by status, sort and paginate tasks.
-- **Platform**: versioned SQL migrations, structured logging, graceful shutdown, health check on `/` in the Docker image.
+- **Authentication**: sign up, sign in and sign out, with private routes for signed-in pages.
+- **Profile**: update profile details, upload an avatar and delete the account.
+- **Tasks**: create, edit, view and delete tasks.
+- **Listing**: filter, sort and paginate tasks, with the state kept in the URL.
+- **Platform**: loading skeletons, error states, toast notifications, `/ping` health check in the Docker image.
 
 ## Configuration
 
-| Variable            | Default                 | Purpose                                  |
-| ------------------- | ----------------------- | ---------------------------------------- |
-| `APP_NAME`          | `taskly-api`            | Application name                         |
-| `APP_HOST`          | `0.0.0.0`               | Bind address                             |
-| `APP_PORT`          | `8080`                  | Port the API listens on                  |
-| `APP_LEVEL`         | `development`           | Environment level                        |
-| `DATABASE_URL`      | required                | PostgreSQL connection string             |
-| `DATABASE_POOL_MAX` | `10`                    | Maximum connections in the pool          |
-| `DATABASE_TIMEOUT`  | `30000`                 | Connection timeout in milliseconds       |
-| `AUTH_SECRET`       | required                | JWT secret, at least 32 characters       |
-| `COOKIE_DOMAIN`     | empty                   | Domain of the auth cookie                |
-| `BCRYPT_ROUNDS`     | `10`                    | bcrypt cost factor                       |
-| `CLIENT_URL`        | `http://localhost:3000` | Allowed CORS origin                      |
-| `LOG_LEVEL`         | `debug`                 | Log level                                |
-| `LOG_TO_FILE`       | `true`                  | Write logs to the `logs` directory       |
-
-Docker only, in `taskly-docker/.env`:
-
-| Variable      | Default  | Purpose                                 |
-| ------------- | -------- | --------------------------------------- |
-| `PORT`        | `8080`   | Host port used by Docker                |
-| `DB_NAME`     | `taskly` | PostgreSQL database name                |
-| `DB_USER`     | `taskly` | PostgreSQL user                         |
-| `DB_PASSWORD` | required | PostgreSQL password, generated by make |
-
-The frontend must set `VITE_API_BASE_URL=http://localhost:8080/api/v1` and `VITE_SERVER_BASE_URL=http://localhost:8080`.
+| Variable                      | Default                        | Purpose                       |
+| ----------------------------- | ------------------------------ | ----------------------------- |
+| `NEXT_PUBLIC_API_BASE_URL`    | `http://localhost:8080/api/v1` | REST API base URL             |
+| `NEXT_PUBLIC_SERVER_BASE_URL` | `http://localhost:8080`        | Host serving uploaded avatars |
+| `PORT`                        | `3000`                         | Host port used by Docker      |
 
 ## Architecture
 
 ### Project layout
 
 ```
-taskly-backend/
+taskly-frontend/
   src/
-    main.ts          process entry point and graceful shutdown
-    app.module.ts    root module
-    bootstrap/       application factory and HTTP configuration
-    config/          environment parsing and validation, config module
-    shared/          errors, event bus, logging, HTTP and PostgreSQL helpers
-    modules/         users, tasks
-    scripts/         migrate, seed
-  test/              unit, integration and e2e suites
+    app/        routes, root layout, providers, navigation bar
+    features/   auth, users, tasks, home
+    shared/     api client, config, components, storage helpers
+    test/       MSW setup, fake backend, factories, in-memory navigation
+  e2e/          Playwright suites
+  public/       static assets
 taskly-docker/
-  taskly-backend/Dockerfile
+  taskly-frontend/Dockerfile
   docker-compose.local.yml
-  docker-compose.dev.yml
   Makefile
 .github/workflows/ci.yml
 ```
 
-### Module layout
+### Feature layout
 
 ```
-modules/<name>/
-  domain/          entities, value objects, repository contracts
-  application/     use cases
-  infrastructure/  PostgreSQL and other adapters
-  presentation/    controllers, guards, interceptors, event subscribers
-  <name>.module.ts NestJS module wiring contracts to adapters
+features/<name>/
+  api/          HTTP calls
+  components/   React components
+  hooks/        TanStack Query hooks
+  pages/        client page components
+  utils/        pure helpers
+  types.ts      feature types
+  index.ts      public API
 ```
+
+### Routing layer
+
+Files in `src/app` are thin route entries. Each `page.tsx` renders a page component exported by a feature, and the page components are Client Components. Signed-in routes live in the `(private)` route group, whose layout wraps them in `PrivateRoute`. Routes that read the URL have a `loading.tsx` that supplies the Suspense boundary and the skeleton.
+
+### Session and rendering
+
+The session lives in `localStorage` and is exposed through `sessionStore` and `useSession`. On the server and during hydration the session reads as signed out and `isReady` is `false`. `PrivateRoute` renders nothing until `isReady` is `true`, then either shows the page or redirects to `/signin`, so server HTML and the first client render always match. Emotion styles are collected by `EmotionRegistry` and streamed into `<head>`.
 
 ### Dependency rules
 
-- Dependencies point inward: presentation and infrastructure depend on application, application depends on domain.
-- Domain and application code is plain TypeScript. Only use cases carry `@Injectable()`.
-- Contracts are abstract classes (`TaskRepository`, `UserRepository`, `PasswordHasher`, `TokenService`, `AvatarStorage`, `EventBus`) used as injection tokens and bound to adapters in each module.
-- Modules communicate through the in-process event bus, so deleting a user removes that user's tasks. The tasks module imports the users module only to reuse its `AuthGuard`.
-- Input is validated inside value objects, not with DTO decorators, so error messages and status codes stay identical to the Express version.
+- A feature is imported only through its `index.ts`. ESLint `no-restricted-imports` rejects deep imports such as `@/features/tasks/hooks/useTasks`.
+- `shared` never imports a feature.
+- Type-only imports use `import type`.
+- Modules that use hooks or browser APIs and are reachable from a feature `index.ts` start with `'use client'`.
 
-### Request pipeline
+## Routes
 
-Body parsing, cookies, request logging and static files are configured in `bootstrap/configure-app.ts`, shared by the server and the tests. Authentication is `AuthGuard`, ownership of an account is `OwnAccountGuard`, avatar upload is `AvatarUploadInterceptor` and every error goes through `AllExceptionsFilter`. The ownership guard runs before the upload interceptor, so a rejected request never writes a file.
-
-## Database
-
-Schema changes live in `src/shared/infrastructure/postgres/migrations` as numbered `.sql` files, copied to `dist` by the Nest build. The migrator applies pending files in order, each inside a transaction, records them in `schema_migrations` and holds an advisory lock so concurrent starts do not race. It runs on every startup and through `npm run migrate`.
-
-| Table   | Notes                                                                                   |
-| ------- | --------------------------------------------------------------------------------------- |
-| `users` | `id` UUID, case-insensitive unique `email` and `username`, `password_hash`, `avatar_file`, timestamps |
-| `tasks` | `id` UUID, `owner_id` UUID (foreign key to `users`), `due` timestamptz, `status` and `priority` limited by `CHECK`, indexed on `(owner_id, status)` |
-
-- Identifiers are UUIDs. API responses expose them as `_id` and `owner`, so existing clients keep working.
-- Listings are ordered by `created_at` and `id`, so ties on the creation time still give a stable order.
-- `tasks.owner_id` references `users(id)` with `ON DELETE CASCADE`. The `user.deleted` event still removes a user's tasks.
-- `status` accepts `todo`, `in_progress` and `done` (default `todo`). `priority` accepts `low`, `medium` and `high`.
-- `email` and `username` are matched without regard to letter case.
-- `due` is stored as a timestamp with time zone and returned as an ISO 8601 UTC string, for example `2026-12-08T10:00:00.000Z`.
-
-## API
-
-All routes are under `/api/v1`. Routes other than sign up and sign in require the `taskly_token` cookie.
-
-| Method | Path                | Purpose                                         |
-| ------ | ------------------- | ----------------------------------------------- |
-| POST   | `/auth/signup`      | Register and sign in                            |
-| POST   | `/auth/signin`      | Sign in                                         |
-| GET    | `/auth/signout`     | Sign out                                        |
-| GET    | `/users`            | List users, filter with `username` and `email`  |
-| GET    | `/users/:id`        | Get a user                                      |
-| PATCH  | `/users/update/:id` | Update own profile                              |
-| POST   | `/users/upload/:id` | Upload own avatar (`avatar` field, 2 MB)        |
-| DELETE | `/users/delete/:id` | Delete own account                              |
-| POST   | `/tasks/create`     | Create a task                                   |
-| GET    | `/tasks/user/:id`   | List own tasks with `status`, `orderBy`, `page` |
-| GET    | `/tasks/:id`        | Get a task                                      |
-| PATCH  | `/tasks/:id`        | Update a task                                   |
-| DELETE | `/tasks/:id`        | Delete a task                                   |
+| Route                   | Purpose            | Access  |
+| ----------------------- | ------------------ | ------- |
+| `/`                     | Home               | Public  |
+| `/signup`, `/signin`    | Authentication     | Public  |
+| `/profile`              | Profile and avatar | Private |
+| `/tasks`                | Task list          | Private |
+| `/create-task`          | Create a task      | Private |
+| `/tasks/[taskId]`       | Task detail        | Private |
+| `/update-task/[taskId]` | Edit a task        | Private |
+| `/ping`                 | Health check       | Public  |
 
 ## Testing
 
-| Layer       | Command                    | What it proves                                        |
-| ----------- | -------------------------- | ----------------------------------------------------- |
-| Unit        | `npm run test:unit`        | Domain and use cases, no I/O                          |
-| Integration | `npm run test:integration` | Repositories and HTTP modules on a real PostgreSQL    |
-| E2E         | `npm run test:e2e`         | Full flows against the compiled server process        |
-| Coverage    | `npm run test:cov`         | Unit tests with coverage                              |
+| Layer         | Command                    | What it proves                                        |
+| ------------- | -------------------------- | ----------------------------------------------------- |
+| Unit          | `npm run test:unit`        | Pure helpers, stores, API client and small components |
+| Integration   | `npm run test:integration` | Pages and flows in jsdom against a mocked API (MSW)   |
+| Coverage      | `npm run test:coverage`    | All Vitest tests with V8 coverage                     |
+| E2E (browser) | `npm run test:e2e`         | Playwright journeys in Chromium against a mocked API  |
 
-Integration and e2e tests need a PostgreSQL server where the user can create databases. They read `TEST_DATABASE_URL` and default to the development database from `make docker/dev-up`. Every suite creates its own temporary database, runs the migrations and drops it afterwards. `npm run test:e2e` builds the project first. Other checks: `npm run lint`, `npm run format:check`.
+Vitest aliases `next/navigation` and `next/link` to the in-memory implementations in `src/test/next`. `MemoryRoutes` and `TestApp` render pages against that router, and `TestApp` reuses the real route files and layouts.
 
-```sh
-TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres npm test
-```
+Install Playwright's browser once with `npm run test:e2e:install` before running the browser suite. Other checks: `npm run lint`, `npm run typecheck`.
 
 ## CI
 
+`.github/workflows/commitlint.yml` lints commit messages on pull requests, configured in `.commitlintrc.json`.
 `.github/workflows/ci.yml` runs these jobs:
 
-1. **Commitlint**: commit message linting on pull requests, configured in `.commitlintrc.json`.
-2. **Quality**: lint, format check and build.
-3. **Tests**: unit, integration and end-to-end suites against a PostgreSQL 18 service.
-4. **Docker**: builds the image, starts the Compose stack, then checks `/`, signs up a user and runs the seed.
-
-## Migrating from Express
-
-The routes, payloads, status codes, error messages, cookie, CORS, avatar handling and database schema are unchanged. Differences:
-
-- Seed and migrate scripts run from the compiled output: `dist/scripts/seed.js` and `dist/scripts/migrate.js`.
-- Authentication is a guard on matched routes. An unknown path under `/api/v1/users` or `/api/v1/tasks` now answers 404 without a cookie, where Express answered 401.
-- Client errors raised by the framework itself, such as an undecodable URL parameter, answer with their own 4xx status instead of 500.
+1. **Quality**: lint, typecheck, unit and integration tests with coverage.
+2. **Build**: production build.
+3. **E2E**: the Playwright suite in Chromium.
+4. **Docker**: image build plus a smoke test that checks `/ping` and requests every page on port 3000.
 
 ## Limits
 
-- The API needs a running PostgreSQL.
-- Uploaded avatars are stored on local disk and served from `/images/users`. The Compose stack keeps them in the `taskly-avatars` volume.
-- Events are delivered in-process, so the app runs as a single instance.
-- Data from the former MongoDB version is not imported. Identifiers changed from ObjectId to UUID, so old sessions are invalid and users sign in again.
+- The app needs a running Taskly API; it does not ship a backend.
+- Uploaded avatars are loaded from `NEXT_PUBLIC_SERVER_BASE_URL`.
+- Authentication state is client side, so private pages are protected in the browser and the API remains the authority.
+- API URLs are fixed at build time.
 
 ## References
 
-- [NestJS](https://nestjs.com)
-- [PostgreSQL](https://www.postgresql.org/docs/18/)
-- [node-postgres](https://node-postgres.com)
-- [JSON Web Tokens](https://jwt.io)
-- [Vitest](https://vitest.dev)
-- [oxlint](https://oxc.rs/docs/guide/usage/linter) · [Prettier](https://prettier.io)
+- [Next.js documentation](https://nextjs.org/docs)
+- [Chakra UI](https://chakra-ui.com)
+- [TanStack Query](https://tanstack.com/query/latest)
+- [React Hook Form](https://react-hook-form.com)
+- [Vitest](https://vitest.dev) · [Testing Library for React](https://testing-library.com/docs/react-testing-library/intro/) · [MSW](https://mswjs.io) · [Playwright](https://playwright.dev)
 - [Docker multi-stage builds](https://docs.docker.com/build/building/multi-stage/)
